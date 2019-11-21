@@ -112,10 +112,10 @@ inline void packet_builder(struct attack_packet *new_packet, struct attack_packe
         new_packet->ip.ip_src = old_packet->ip.ip_dst;
         new_packet->ip.ip_dst = old_packet->ip.ip_src;
     }
-
+    uint32_t old_data_length = ntohs(old_packet->ip.ip_len) - (old_packet->ip.ip_hl * sizeof(uint32_t)) - (old_packet->tcp.th_off * sizeof(uint32_t));
     // TCP
     if (forward) {
-        uint32_t old_data_length = ntohs(old_packet->ip.ip_len) - (old_packet->ip.ip_hl * sizeof(uint32_t)) - (old_packet->tcp.th_off * sizeof(uint32_t));
+        // printf("%d\n", old_data_length);
         new_packet->tcp.th_sport = old_packet->tcp.th_sport;
         new_packet->tcp.th_dport = old_packet->tcp.th_dport;
         new_packet->tcp.th_seq = htonl(ntohl(old_packet->tcp.th_seq) + old_data_length);
@@ -124,7 +124,9 @@ inline void packet_builder(struct attack_packet *new_packet, struct attack_packe
     else {
         new_packet->tcp.th_sport = old_packet->tcp.th_dport;
         new_packet->tcp.th_dport = old_packet->tcp.th_sport;
-        new_packet->tcp.th_ack = new_packet->tcp.th_seq = old_packet->tcp.th_ack;
+        new_packet->tcp.th_seq = old_packet->tcp.th_ack;
+        new_packet->tcp.th_ack = htonl(ntohl(old_packet->tcp.th_seq) + old_data_length);
+        // printf("%d %d\n", new_packet->tcp.th_ack, old_packet->tcp.th_ack);
     }
     new_packet->tcp.th_off = sizeof(struct libnet_tcp_hdr) / sizeof(uint32_t);
     // TODO: Endian check
@@ -238,7 +240,7 @@ int main(int argc, char *argv[]) {
 
     char *dev = argv[1];
     char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+    pcap_t *handle = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
     ASSERT(handle != NULL, errbuf);
 
     while (true) {
@@ -251,10 +253,11 @@ int main(int argc, char *argv[]) {
         if (res == -1 || res == -2) break;
 
         if(handler(&parsed_packet, header, packet, argv[2])) {
+            packet_builder(&new_packet, &parsed_packet, false, TH_RST | TH_ACK);
+            pcap_inject(handle, &new_packet, sizeof(new_packet));
             packet_builder(&new_packet, &parsed_packet, true, TH_RST | TH_ACK);
             pcap_inject(handle, &new_packet, sizeof(new_packet));
-            packet_builder(&new_packet, &parsed_packet, false, TH_FIN | TH_ACK);
-            pcap_inject(handle, &new_packet, sizeof(new_packet));
+            
         }
     }
 
